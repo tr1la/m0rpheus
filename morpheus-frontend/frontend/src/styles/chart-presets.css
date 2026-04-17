@@ -1,0 +1,228 @@
+/**
+ * Chart Theme Presets - CSS Custom Properties for Dynamic Chart Styling
+ * Warm light Intercom-inspired palette with 6 curated themes
+ */
+
+/* OCEAN Theme - Vibrant blue on warm cream */
+.chart-theme-ocean {
+  --highlight-color: #3b82f6;
+  --bg-dashboard-color: #FFF9F5;
+  --bg-card-color: #ffffff;
+  --border-card-color: #dedbd6;
+  --title-color: #1F2937;
+  --description-color: #7b7b78;
+  --element-color: #626260;
+
+  --highlight-color-rgb: 59, 130, 246;
+  --element-color-rgb: 98, 98, 96;
+
+  --chart-animation-duration: 0.8s;
+  --chart-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  --chart-hover-scale: 1.02;
+}
+
+/* FOREST Theme - Emerald green on warm cream */
+.chart-theme-forest {
+  --highlight-color: #10b981;
+  --bg-dashboard-color: #FFF9F5;
+  --bg-card-color: #ffffff;
+  --border-card-color: #dedbd6;
+  --title-color: #1F2937;
+  --description-color: #7b7b78;
+  --element-color: #626260;
+
+  --highlight-color-rgb: 16, 185, 129;
+  --element-color-rgb: 98, 98, 96;
+
+  --chart-animation-duration: 0.8s;
+  --chart-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  --chart-hover-scale: 1.02;
+}
+
+/* SUNSET Theme - Amber/orange on warm cream */
+.chart-theme-sunset {
+  --highlight-color: #ff5600;
+  --bg-dashboard-color: #FFF9F5;
+  --bg-card-color: #ffffff;
+  --border-card-color: #dedbd6;
+  --title-color: #1F2937;
+  --description-color: #7b7b78;
+  --element-color: #626260;
+
+  --highlight-color-rgb: 255, 86, 0;
+  --element-color-rgb: 98, 98, 96;
+
+  --chart-animation-duration: 0.8s;
+  --chart-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  --chart-hover-scale: 1.02;
+}
+
+/* MIDNIGHT Theme - Purple on warm cream */
+.chart-theme-midnight {
+  --highlight-color: #8b5cf6;
+  --bg-dashboard-color: #FFF9F5;
+  --bg-card-color: #ffffff;
+  --border-card-color: #dedbd6;
+  --title-color: #1F2937;
+  --description-color: #7b7b78;
+  --element-color: #626260;
+
+  --highlight-color-rgb: 139, 92, 246;
+  --element-color-rgb: 98, 98, 96;
+
+  --chart-animation-duration: 1s;
+  --chart-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  --chart-hover-scale: 1.03;
+}
+
+/* SAKURA Theme - Pink on warm cream */
+.chart-theme-sakura {
+  --highlight-color: #ec4899;
+  --bg-dashboard-color: #FFF9F5;
+  --bg-card-color: #ffffff;
+  --border-card-color: #dedbd6;
+  --title-color: #1F2937;
+  --description-color: #7b7b78;
+  --element-color: #626260;
+
+  --highlight-color-rgb: 236, 72, 153;
+  --element-color-rgb: 98, 98, 96;
+
+  --chart-animation-duration: 1.2s;
+  --chart-animation-easing: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+  --chart-hover-scale: 1.05;
+}
+
+/* MONOCHROME Theme - Off-black on warm cream */
+.chart-theme-monochrome {
+  --highlight-color: #1F2937;
+  --bg-dashboard-color: #FFF9F5;
+  --bg-card-color: #ffffff;
+  --border-card-color: #dedbd6;
+  --title-color: #1F2937;
+  --description-color: #7b7b78;
+  --element-color: #626260;
+
+  --highlight-color-rgb: 17, 17, 17;
+  --element-color-rgb: 98, 98, 96;
+
+  --monochrome-color-0: #1F2937;
+  --monochrome-color-1: #ff5600;
+  --monochrome-color-2: #65b5ff;
+  --monochrome-color-3: #0bdf50;
+  --monochrome-color-4: #ff2067;
+  --monochrome-color-5: #b3e01c;
+  --monochrome-color-6: #7b7b78;
+  --monochrome-color-7: #dedbd6;
+  --monochrome-color-8: #fe4c02;
+  --monochrome-color-9: #313130;
+
+  --chart-animation-duration: 0.8s;
+  --chart-animation-easing: cubic-bezier(0.4, 0, 0.2, 1);
+  --chart-hover-scale: 1.02;
+}
+
+@layer components {
+  .chart-animate-fade-in {
+    animation: chartFadeIn var(--chart-animation-duration, 0.8s) var(--chart-animation-easing, cubic-bezier(0.4, 0, 0.2, 1)) forwards;
+  }
+
+  .chart-animate-scale-in {
+    animation: chartScaleIn var(--chart-animation-duration, 0.8s) var(--chart-animation-easing, cubic-bezier(0.4, 0, 0.2, 1)) forwards;
+  }
+
+  .chart-animate-slide-up {
+    animation: chartSlideUp var(--chart-animation-duration, 0.8s) var(--chart-animation-easing, cubic-bezier(0.4, 0, 0.2, 1)) forwards;
+  }
+
+  .chart-hover-effect {
+    transition: transform 0.2s ease-out;
+  }
+
+  .chart-hover-effect:hover {
+    transform: scale(var(--chart-hover-scale, 1.02));
+  }
+
+  .chart-grid {
+    stroke: rgba(var(--element-color-rgb), 0.2);
+    stroke-width: 1;
+  }
+
+  .chart-tooltip {
+    background-color: var(--bg-card-color);
+    border: 1px solid var(--border-card-color);
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--description-color);
+  }
+
+  .chart-legend {
+    color: var(--description-color);
+    font-size: 12px;
+  }
+
+  .chart-axis {
+    color: var(--element-color);
+    font-size: 11px;
+  }
+
+  .chart-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+  }
+
+  .chart-container.recharts-wrapper {
+    font-family: inherit;
+  }
+
+  @media (max-width: 768px) {
+    .chart-tooltip {
+      font-size: 10px;
+      padding: 6px 8px;
+    }
+    
+    .chart-legend {
+      font-size: 10px;
+    }
+    
+    .chart-axis {
+      font-size: 9px;
+    }
+  }
+
+  @keyframes chartFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes chartScaleIn {
+    from { opacity: 0; transform: scale(0.8); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  @keyframes chartSlideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chart-animate-fade-in,
+    .chart-animate-scale-in,
+    .chart-animate-slide-up {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+    
+    .chart-hover-effect {
+      transition: none;
+    }
+    
+    .chart-hover-effect:hover {
+      transform: none;
+    }
+  }
+}
