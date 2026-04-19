@@ -1,0 +1,1079 @@
+import { useState, useEffect, useMemo, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Responsive, WidthProvider, Layouts, Layout } from "react-grid-layout";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { RefreshCw, AlertCircle, Loader2, ChevronDown, ChevronUp, CalendarIcon, Maximize2, X } from "lucide-react";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { Button } from "@/components/ui/button";
+import { DateRange } from "react-day-picker";
+import { format } from "date-fns";
+import ChartRenderer from "@/components/charts/ChartRenderer";
+import { useDashboard } from "@/hooks/useDashboard";
+import { DashboardGenerationRequest, LayoutType, ChartType } from "@/types/dashboard";
+import { 
+  convertLLMStylingToChartStyling,
+  validateChartStyling,
+  getDefaultChartStyling,
+  applyChartStyling,
+  getChartStylingClasses,
+  getDashboardBackgroundStyle,
+  CHART_THEME_COLORS,
+  ChartPresetTheme
+} from "@/utils/chartStyling";
+
+interface DashboardPreviewProps {
+  dataSource?: string;
+  dashboardId?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  processedData?: any;
+}
+
+const DashboardPreview = ({ 
+  dataSource,
+  dashboardId,
+  className = "",
+  style = {},
+  processedData
+}: DashboardPreviewProps) => {
+  const [activeSection, setActiveSection] = useState("overview");
+  const [expandedInsights, setExpandedInsights] = useState(false);
+  const [spotlightId, setSpotlightId] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined);
+  const { dashboardState, generateDashboard, refreshDashboard, resetDashboard, updateComponent } = useDashboard(dashboardId);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const originalProcessedDataRef = useRef<any>(null);
+
+  // No automatic dashboard generation on mount
+
+  // Utility function to parse date labels
+  const parseDateLabel = (label: string): Date | null => {
+    if (!label) return null;
+    // Try ISO format first
+    const iso = new Date(label);
+    if (!isNaN(iso.getTime())) return iso;
+    
+    // Try common formats
+    const formats = [
+      /^(\d{4})-(\d{2})-(\d{2})/, // YYYY-MM-DD
+      /^(\d{2})\/(\d{2})\/(\d{4})/, // MM/DD/YYYY
+      /^(\d{2})-(\d{2})-(\d{2})$/, // MM-DD-YY
+    ];
+    
+    for (const format of formats) {
+      const match = label.match(format);
+      if (match) {
+        if (format === formats[0]) {
+          // YYYY-MM-DD
+          return new Date(parseInt(match[1]), parseInt(match[2]) - 1, parseInt(match[3]));
+        } else if (format === formats[1]) {
+          // MM/DD/YYYY
+          return new Date(parseInt(match[3]), parseInt(match[1]) - 1, parseInt(match[2]));
+        } else if (format === formats[2]) {
+          // MM-DD-YY
+          const year = parseInt(match[3]) + (parseInt(match[3]) < 50 ? 2000 : 1900);
+          return new Date(year, parseInt(match[1]) - 1, parseInt(match[2]));
+        }
+      }
+    }
+    
+    return null;
+  };
+
+  // Utility function to extract numeric value from formatted string
+  const extractNumericValue = (value: string | number): number | null => {
+    if (typeof value === 'number') {
+      return isFinite(value) ? value : null;
+    }
+    if (typeof value !== 'string') {
+      return null;
+    }
+    // Remove common formatting: commas, currency symbols, percentage signs, whitespace
+    const cleaned = value.replace(/[,\s$€£¥%]/g, '');
+    const parsed = parseFloat(cleaned);
+    return isFinite(parsed) ? parsed : null;
+  };
+
+  // Utility function to extract sparkline data from chart
+  const extractSparklineData = (chart: any): Array<{label: string, value: number}> | undefined => {
+    if (!chart) return undefined;
+    
+    // Try to get data from first dataset
+    if (Array.isArray(chart.datasets) && chart.datasets.length > 0) {
+      const firstDataset = chart.datasets[0];
+      if (Array.isArray(firstDataset.data) && firstDataset.data.length > 0) {
+        return firstDataset.data.map((item: any) => ({
+          label: item.label || String(item.label),
+          value: typeof item.value === 'number' ? item.value : parseFloat(String(item.value)) || 0
+        }));
+      }
+    }
+    
+    return undefined;
+  };
+
+  // Utility function to compute time_comparison from sparkline data
+  const computeTimeComparisonFromData = (
+    sparklineData: Array<{label: string, value: number}> | undefined,
+    currentValue: number | null,
+    period: string = 'wow'
+  ): { period: string; current_value: number; previous_value: number; percentage_change: number } | null => {
+    if (!sparklineData || sparklineData.length < 2) {
+      return null;
+    }
+    
+    // Create a copy and try to sort by date if labels are dates
+    let sortedData = [...sparklineData];
+    const dates = sortedData.map(item => parseDateLabel(item.label)).filter(d => d !== null);
+    
+    if (dates.length === sortedData.length) {
+      // All labels are valid dates, sort by date
+      sortedData.sort((a, b) => {
+        const dateA = parseDateLabel(a.label);
+        const dateB = parseDateLabel(b.label);
+        if (!dateA || !dateB) return 0;
+        return dateA.getTime() - dateB.getTime();
+      });
+    }
+    
+    const latest = sortedData[sortedData.length - 1];
+    const previous = sortedData[sortedData.length - 2];
+    
+    if (!latest || !previous || typeof latest.value !== 'number' || typeof previous.value !== 'number') {
+      return null;
+    }
+    
+    const current = currentValue !== null && isFinite(currentValue) ? currentValue : latest.value;
+    const prev = previous.value;
+    
+    if (prev === 0 || !isFinite(current) || !isFinite(prev)) {
+      return null;
+    }
+    
+    const percentageChange = ((current - prev) / prev) * 100;
+    
+    return {
+      period,
+      current_value: current,
+      previous_value: prev,
+      percentage_change: percentageChange
+    };
+  };
+
+  // Utility function to find matching chart for metric
+  const findMatchingChartForMetric = (metricTitle: string, charts: any[]): any | null => {
+    if (!metricTitle || !Array.isArray(charts) || charts.length === 0) return null;
+    
+    // Normalize metric title
+    const normalizedMetric = metricTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+    
+    // Keywords that might appear in both metric and chart titles
+    const keywords = ['revenue', 'users', 'orders', 'sales', 'stickiness', 'active', 'total', 'average', 'count'];
+    
+    for (const chart of charts) {
+      if (!chart.title) continue;
+      
+      const normalizedChart = chart.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+      
+      // Check if chart has time-series data
+      const hasTimeSeriesData = Array.isArray(chart.datasets) && 
+                                chart.datasets.length > 0 && 
+                                Array.isArray(chart.datasets[0]?.data) &&
+                                chart.datasets[0].data.length > 0;
+      
+      if (!hasTimeSeriesData) continue;
+      
+      // Check for keyword matches
+      for (const keyword of keywords) {
+        if (normalizedMetric.includes(keyword) && normalizedChart.includes(keyword)) {
+          return chart;
+        }
+      }
+      
+      // Check if metric title is a substring of chart title or vice versa
+      if (normalizedMetric.length > 3 && (normalizedChart.includes(normalizedMetric) || normalizedMetric.includes(normalizedChart))) {
+        return chart;
+      }
+    }
+    
+    return null;
+  };
+
+  // Utility function to filter data by date range
+  const filterDataByDateRange = (data: any, dateRange: DateRange | undefined): any => {
+    if (!dateRange || !dateRange.from || !dateRange.to || !data) {
+      return data;
+    }
+    
+    const filtered = JSON.parse(JSON.stringify(data)); // Deep clone
+    
+    // Filter charts
+    if (Array.isArray(filtered.charts)) {
+      filtered.charts = filtered.charts.map((chart: any) => {
+        if (!Array.isArray(chart.datasets)) return chart;
+        
+        const filteredChart = { ...chart };
+        filteredChart.datasets = chart.datasets.map((dataset: any) => {
+          if (!Array.isArray(dataset.data)) return dataset;
+          
+          const filteredDataset = { ...dataset };
+          filteredDataset.data = dataset.data.filter((item: any) => {
+            const itemDate = parseDateLabel(item.label || String(item.label));
+            if (!itemDate) return true; // Keep items without valid dates
+            return itemDate >= dateRange.from! && itemDate <= dateRange.to!;
+          });
+          
+          return filteredDataset;
+        });
+        
+        return filteredChart;
+      });
+    }
+    
+    // Recalculate metrics from filtered chart data
+    if (Array.isArray(filtered.metrics)) {
+      filtered.metrics = filtered.metrics.map((metric: any) => {
+        // Try to find related chart
+        let relatedChart = null;
+        if (metric.related_chart_id) {
+          relatedChart = filtered.charts?.find((c: any) => c.id === metric.related_chart_id);
+        } else {
+          relatedChart = findMatchingChartForMetric(metric.title || metric.name, filtered.charts || []);
+        }
+        
+        if (relatedChart && Array.isArray(relatedChart.datasets) && relatedChart.datasets.length > 0) {
+          const dataset = relatedChart.datasets[0];
+          if (Array.isArray(dataset.data) && dataset.data.length > 0) {
+            const values = dataset.data.map((item: any) => {
+              const val = typeof item.value === 'number' ? item.value : parseFloat(String(item.value)) || 0;
+              return val;
+            }).filter((v: number) => !isNaN(v));
+            
+            if (values.length > 0) {
+              // Recalculate metric value (sum for totals, average for averages)
+              const metricTitleLower = (metric.title || metric.name || '').toLowerCase();
+              let newValue: number;
+              
+              if (metricTitleLower.includes('total') || metricTitleLower.includes('sum')) {
+                newValue = values.reduce((sum: number, val: number) => sum + val, 0);
+              } else if (metricTitleLower.includes('average') || metricTitleLower.includes('avg') || metricTitleLower.includes('mean')) {
+                newValue = values.reduce((sum: number, val: number) => sum + val, 0) / values.length;
+              } else {
+                // Default to sum
+                newValue = values.reduce((sum: number, val: number) => sum + val, 0);
+              }
+              
+              // Format the value similar to original
+              const originalValue = metric.value;
+              if (typeof originalValue === 'string' && originalValue.includes('$')) {
+                metric.value = `$${newValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+              } else if (typeof originalValue === 'string' && originalValue.includes('%')) {
+                metric.value = `${newValue.toFixed(2)}%`;
+              } else {
+                metric.value = newValue.toLocaleString('en-US');
+              }
+            }
+          }
+        }
+        
+        return metric;
+      });
+    }
+    
+    return filtered;
+  };
+
+  // Normalize incoming data (Morpheus-first format)
+  const getDashboardStyling = (data: any) => {
+    if (!data?.styling_recommendations) return undefined;
+    const converted = convertLLMStylingToChartStyling(data.styling_recommendations);
+    const validation = validateChartStyling(converted);
+    return validation.isValid ? converted : getDefaultChartStyling();
+  };
+
+  const normalizeChartDataPoints = (dataPoints: any[], chartType: string): any[] => {
+    if (chartType === 'pie' || chartType === 'donut') {
+      return dataPoints.map(point => ({ ...point, label: point.label || point.name || '' }));
+    }
+    return dataPoints;
+  };
+
+  const normalizeChartDatasets = (datasets: any[], chartType: string, config: any): any[] => {
+    if (!Array.isArray(datasets) || datasets.length === 0) return [];
+    
+    return datasets.map((dataset: any) => {
+      // Handle treemap: convert children array to data array
+      if (chartType === 'treemap' && Array.isArray(dataset.children)) {
+        return {
+          ...dataset,
+          data: dataset.children.map((child: any) => ({
+            label: child.name || child.label || '',
+            value: typeof child.value === 'number' ? child.value : parseFloat(String(child.value)) || 0
+          }))
+        };
+      }
+      
+      // Handle radar: convert numeric array to objects with label/value
+      if (chartType === 'radar' && Array.isArray(dataset.data)) {
+        const labels = config?.labels || [];
+        // Check if data is array of numbers (not objects)
+        if (dataset.data.length > 0 && typeof dataset.data[0] === 'number') {
+          return {
+            ...dataset,
+            data: dataset.data.map((value: number, index: number) => ({
+              label: labels[index] || `Label ${index + 1}`,
+              value: typeof value === 'number' ? value : parseFloat(String(value)) || 0
+            }))
+          };
+        }
+      }
+      
+      // Handle pie/donut: normalize data points (existing logic)
+      if (chartType === 'pie' || chartType === 'donut') {
+        return {
+          ...dataset,
+          data: normalizeChartDataPoints(dataset.data || [], chartType)
+        };
+      }
+      
+      // Default: return dataset as-is
+      return dataset;
+    });
+  };
+
+  const normalizeDashboard = (data: any) => {
+    if (!data) return null;
+    const components: any[] = [];
+    let componentId = 1;
+
+    // Dashboard-level styling (light theme from backend)
+    const dashboardStyling = getDashboardStyling(data);
+    const dashboardTile: any = (dashboardStyling as any)?.tile;
+
+    // Metrics (Morpheus: name -> title, optional change/trend)
+    if (Array.isArray(data.metrics)) {
+      data.metrics.forEach((m: any, idx: number) => {
+        // Extract numeric value from formatted string
+        const numericValue = extractNumericValue(m.value);
+        
+        // Extract sparkline data first (needed for time_comparison computation)
+        let sparklineData: Array<{label: string, value: number}> | undefined;
+        
+        // Priority 1: Direct sparkline data from LLM
+        if (m.sparkline_data && Array.isArray(m.sparkline_data)) {
+          sparklineData = m.sparkline_data.map((item: any) => ({
+            label: item.label || String(item.label),
+            value: typeof item.value === 'number' ? item.value : parseFloat(String(item.value)) || 0
+          }));
+        }
+        // Priority 2: Related chart ID
+        else if (m.related_chart_id) {
+          const relatedChart = data.charts?.find((c: any) => c.id === m.related_chart_id);
+          if (relatedChart) {
+            sparklineData = extractSparklineData(relatedChart);
+          }
+        }
+        // Priority 3: Heuristic matching (fallback)
+        else {
+          const matchingChart = findMatchingChartForMetric(m.title || m.name, data.charts || []);
+          if (matchingChart) {
+            sparklineData = extractSparklineData(matchingChart);
+          }
+        }
+        
+        // Compute time_comparison if missing
+        let timeComparison = m.time_comparison;
+        if (!timeComparison && sparklineData && sparklineData.length >= 2) {
+          const computed = computeTimeComparisonFromData(sparklineData, numericValue, m.time_comparison?.period);
+          if (computed) {
+            timeComparison = computed;
+          }
+        }
+        
+        // Derive change and trend from time_comparison or existing logic
+        const prev = timeComparison?.previous_value;
+        let change: string | number | undefined = m.change;
+        let trend: string | undefined = m.trend;
+        
+        // Priority 1: Use time_comparison.percentage_change if available
+        if (timeComparison?.percentage_change !== undefined && timeComparison.percentage_change !== null) {
+          const pct = timeComparison.percentage_change;
+          change = `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`;
+          trend = pct > 0 ? 'up' : pct < 0 ? 'down' : 'stable';
+        }
+        // Priority 2: Compute from time_comparison values if available
+        else if (numericValue !== null && typeof prev === 'number' && prev !== 0) {
+          const pct = ((numericValue - prev) / prev) * 100;
+          change = `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`;
+          trend = pct > 0 ? 'up' : pct < 0 ? 'down' : 'stable';
+        }
+        // Priority 3: Use provided change/trend if available
+        else if (change === undefined || change === null) {
+          // Keep change and trend as undefined if we can't compute
+        }
+        
+        const layout = m?.layout;
+        const hasLayout = layout && Number.isFinite(layout.x) && Number.isFinite(layout.y) && Number.isFinite(layout.w) && Number.isFinite(layout.h);
+        // Convert metric styling if it has theme property
+        const metricStyling = m.styling ? convertLLMStylingToChartStyling(m.styling) : undefined;
+        const validatedMetricStyling = metricStyling && validateChartStyling(metricStyling).isValid
+          ? metricStyling
+          : (dashboardStyling || getDefaultChartStyling());
+        
+        components.push({
+          id: `metric_${componentId++}`,
+          type: 'metric',
+          position: hasLayout
+            ? { x: layout.x, y: layout.y, width: layout.w, height: layout.h }
+            : { x: (idx % 4) * 3, y: Math.floor(idx / 4) * 2, width: 3, height: 2 },
+          layout: hasLayout ? { ...layout } : undefined,
+          component_config: {
+            id: m.id || `metric_${idx + 1}`,
+            title: m.title || m.name || 'Metric',
+            value: m.value,
+            change,
+            trend,
+            data: sparklineData,
+            dataKey: 'value',
+            timeComparison: timeComparison,
+            // Convert and merge styling with dashboard defaults
+            styling: {
+              ...validatedMetricStyling,
+              tile: {
+                ...(dashboardTile || {}),
+                ...((validatedMetricStyling as any)?.tile || {})
+              }
+            }
+          }
+        });
+      });
+    }
+
+    // Charts (Morpheus: chart_type + config axis)
+    const typeMap: Record<string, string> = {
+      // Direct mappings for current LLM output
+      line: 'line',
+      bar: 'bar',
+      pie: 'pie',
+      area: 'area',
+      scatter: 'scatter',
+      composed: 'composed',
+      radar: 'radar',
+      radial_bar: 'radial_bar',
+      funnel: 'funnel',
+      treemap: 'treemap',
+      sankey: 'sankey',
+      donut: 'donut',
+      geographic: 'geographic',
+      table: 'table',
+      metric: 'metric',
+      
+      // Legacy mappings for backward compatibility
+      line_chart: 'line',
+      bar_chart: 'bar',
+      pie_chart: 'pie',
+      area_chart: 'area',
+      scatter_chart: 'scatter',
+      composed_chart: 'composed',
+      radar_chart: 'radar',
+      radial_bar_chart: 'radial_bar',
+      funnel_chart: 'funnel',
+      treemap_chart: 'treemap',
+      sankey_chart: 'sankey',
+      donut_chart: 'donut'
+    };
+    if (Array.isArray(data.charts)) {
+      data.charts.forEach((c: any, idx: number) => {
+        const mappedType = typeMap[(c.chart_type || '').toLowerCase()] || 'line';
+        
+        // Handle tables in charts array - they need special processing
+        if (mappedType === 'table') {
+          const tableStyling = c.styling ? convertLLMStylingToChartStyling(c.styling) : undefined;
+          const validatedTableStyling = tableStyling && validateChartStyling(tableStyling).isValid
+            ? tableStyling
+            : (dashboardStyling || getDefaultChartStyling());
+          
+          const layout = c?.layout;
+          const hasLayout = layout && Number.isFinite(layout.x) && Number.isFinite(layout.y) && Number.isFinite(layout.w) && Number.isFinite(layout.h);
+          
+          components.push({
+            id: `table_${componentId++}`,
+            type: 'table',
+            position: hasLayout
+              ? { x: layout.x, y: layout.y, width: layout.w, height: layout.h }
+              : { x: 0, y: Math.floor(idx / 2) * 6 + 6, width: 12, height: 3 },
+            layout: hasLayout ? { ...layout } : undefined,
+            component_config: {
+              id: c.id || `table_${idx + 1}`,
+              title: c.title || 'Table',
+              description: c.description || '',
+              columns: Array.isArray(c.columns) ? c.columns : [],
+              data: Array.isArray(c.data) ? c.data : (Array.isArray(c.rows) ? c.rows : []),
+              styling: {
+                ...validatedTableStyling,
+                tile: {
+                  ...(dashboardTile || {}),
+                  ...((validatedTableStyling as any)?.tile || {})
+                }
+              }
+            }
+          });
+          return; // Skip chart processing for tables
+        }
+        
+        // Regular chart processing
+        const chartLevelStyling = c.styling ? convertLLMStylingToChartStyling(c.styling) : undefined;
+        const validatedChartStyling = chartLevelStyling && validateChartStyling(chartLevelStyling).isValid
+          ? chartLevelStyling
+          : (dashboardStyling || getDefaultChartStyling());
+        // merge dashboard tile defaults
+        const mergedChartStyling: any = {
+          ...validatedChartStyling,
+          tile: {
+            ...(dashboardTile || {}),
+            ...((chartLevelStyling as any)?.tile || {})
+          }
+        };
+
+        const layout = c?.layout;
+        const hasLayout = layout && Number.isFinite(layout.x) && Number.isFinite(layout.y) && Number.isFinite(layout.w) && Number.isFinite(layout.h);
+        
+        // Normalize datasets based on chart type
+        const normalizedDatasets = Array.isArray(c.datasets)
+          ? normalizeChartDatasets(c.datasets, mappedType, c.config || {})
+          : [];
+        
+        components.push({
+          id: `chart_${componentId++}`,
+          type: 'chart',
+          position: hasLayout
+            ? { x: layout.x, y: layout.y, width: layout.w, height: layout.h }
+            : { x: (idx % 2) * 6, y: Math.floor(idx / 2) * 4 + 2, width: 6, height: 4 },
+          layout: hasLayout ? { ...layout } : undefined,
+          component_config: {
+            id: c.id || `chart_${idx + 1}`,
+            type: mappedType,
+            title: c.title || 'Chart',
+            description: c.description || '',
+            insight: c.reasoning?.insight || '',
+            axisConfig: c.config || { xKey: 'label', yKey: 'value' },
+            datasets: normalizedDatasets,
+            data: c.data,
+            config: {},
+            styling: mergedChartStyling
+          }
+        });
+      });
+    }
+
+    // Tables (Morpheus: columns string[] + rows objects)
+    // Check both top-level and nested data.tables
+    const tablesToProcess = Array.isArray(data.tables) ? data.tables : 
+                           (data.data && Array.isArray(data.data.tables)) ? data.data.tables : [];
+    
+    if (tablesToProcess.length > 0) {
+      tablesToProcess.forEach((t: any, idx: number) => {
+        const layout = t?.layout;
+        const hasLayout = layout && Number.isFinite(layout.x) && Number.isFinite(layout.y) && Number.isFinite(layout.w) && Number.isFinite(layout.h);
+        // Convert table styling if it has theme property
+        const tableStyling = t.styling ? convertLLMStylingToChartStyling(t.styling) : undefined;
+        const validatedTableStyling = tableStyling && validateChartStyling(tableStyling).isValid
+          ? tableStyling
+          : (dashboardStyling || getDefaultChartStyling());
+        
+        components.push({
+          id: `table_${componentId++}`,
+          type: 'table',
+          position: hasLayout
+            ? { x: layout.x, y: layout.y, width: layout.w, height: layout.h }
+            : { x: 0, y: Math.floor(idx / 2) * 6 + 6, width: 12, height: 3 },
+          layout: hasLayout ? { ...layout } : undefined,
+          component_config: {
+            id: t.id || `table_${idx + 1}`,
+            title: t.title || 'Table',
+            description: t.description || '',
+            columns: Array.isArray(t.columns) ? t.columns : [],
+            data: Array.isArray(t.data) ? t.data : (Array.isArray(t.rows) ? t.rows : []),
+            // Convert and merge styling with dashboard defaults
+            styling: {
+              ...validatedTableStyling,
+              tile: {
+                ...(dashboardTile || {}),
+                ...((validatedTableStyling as any)?.tile || {})
+              }
+            }
+          }
+        });
+      });
+    }
+
+    const gridColumns = data?.layout?.recommended_grid?.length ? 12 : 12;
+    const dashboardConfig = {
+      id: 'processed_dashboard',
+      layout: { type: 'grid', grid_columns: gridColumns, grid_rows: 20 },
+      components
+    };
+    return dashboardConfig;
+  };
+
+  // Store original processedData on mount
+  useEffect(() => {
+    if (processedData && !originalProcessedDataRef.current) {
+      originalProcessedDataRef.current = processedData;
+    }
+  }, [processedData]);
+
+  // Apply dashboard-level styling to container
+  const dashboardStylingForContainer = useMemo(() => getDashboardStyling(processedData), [processedData]);
+  useEffect(() => {
+    if (containerRef.current && dashboardStylingForContainer) {
+      applyChartStyling(containerRef.current, dashboardStylingForContainer);
+    }
+  }, [dashboardStylingForContainer]);
+
+  // Helper function to get dashboard theme styles as inline CSS properties
+  const getDashboardThemeStyles = (styling: any): React.CSSProperties => {
+    if (!styling) return {};
+    const theme = styling.presetTheme as ChartPresetTheme;
+    const themeColors = CHART_THEME_COLORS[theme] || CHART_THEME_COLORS.monochrome;
+    return {
+      backgroundColor: themeColors['bg-card-color'],
+      borderColor: themeColors['border-card-color'],
+      color: themeColors['title-color'],
+    };
+  };
+
+  // Filter processedData by date range
+  const filteredProcessedData = useMemo(() => {
+    const sourceData = originalProcessedDataRef.current || processedData;
+    if (!sourceData) return null;
+    return filterDataByDateRange(sourceData, dateRange);
+  }, [processedData, dateRange]);
+
+  // Grid layout config
+  const ResponsiveGridLayout = useMemo(() => WidthProvider(Responsive), []);
+  const breakpoints = { lg: 1200, md: 996, sm: 768, xs: 480, xxs: 0 } as const;
+  const cols = { lg: 24, md: 12, sm: 8, xs: 4, xxs: 2 } as const;
+  const margin: [number, number] = [6, 6];
+  const containerPadding: [number, number] = [6,6];
+  const rowHeight = 30;
+
+  // Build normalized dashboards and active selection
+  const normalizedProcessed = useMemo(() => filteredProcessedData ? normalizeDashboard(filteredProcessedData) : null, [filteredProcessedData]);
+  const activeDashboard = useMemo(() => {
+    if (normalizedProcessed) return normalizedProcessed;
+    if (dashboardState.configuration) return dashboardState.configuration as any;
+    return null;
+  }, [normalizedProcessed, dashboardState.configuration]);
+
+  // Helpers to build layouts per component list
+  const getMinSizeForType = (type: string) => {
+    if (type === 'metric') return { minW: 2, minH: 2 };
+    if (type === 'table') return { minW: 12, minH: 10 };
+    return { minW: 4, minH: 4 }; // default for charts
+  };
+
+  const componentsToBaseLayout = (components: any[]): Layout[] => {
+    return components.map((c: any, index: number) => {
+      const typeMin = getMinSizeForType(c.type);
+      const src = c.layout || {};
+      const x = Number.isFinite(src.x) ? src.x : (Number.isFinite(c.position?.x) ? c.position.x : (index % 12));
+      const y = Number.isFinite(src.y) ? src.y : (Number.isFinite(c.position?.y) ? c.position.y : Math.floor(index / 12));
+      const w = Number.isFinite(src.w) ? src.w : (Number.isFinite(c.position?.width) ? c.position.width : 4);
+      const h = Number.isFinite(src.h) ? src.h : (Number.isFinite(c.position?.height) ? c.position.height : 4);
+      // Enforce content-driven minima for first render if provided by backend; otherwise type defaults
+      const minW = Number.isFinite(src.minW) ? src.minW : typeMin.minW;
+      const minH = Number.isFinite(src.minH) ? src.minH : typeMin.minH;
+      return { i: String(c.id), x, y, w, h, minW, minH, static: false } as Layout;
+    });
+  };
+
+  // Scale a layout from one column system to another while preserving proportions
+  const scaleLayoutForCols = (layout: Layout[], fromCols: number, toCols: number): Layout[] => {
+    return layout.map((item) => {
+      const scaledW = Math.max(1, Math.round((item.w * toCols) / fromCols));
+      let scaledX = Math.round((item.x * toCols) / fromCols);
+      // clamp to ensure the item fits within the target column count
+      if (scaledX + scaledW > toCols) {
+        scaledX = Math.max(0, toCols - scaledW);
+      }
+      const scaledMinW = item.minW ? Math.max(1, Math.round((item.minW * toCols) / fromCols)) : item.minW;
+      return { ...item, x: scaledX, w: scaledW, minW: scaledMinW } as Layout;
+    });
+  };
+
+  const buildLayoutsFromComponents = (components: any[] | undefined | null): Layouts => {
+    const baseLg = components ? componentsToBaseLayout(components) : [];
+    return {
+      lg: baseLg,
+      md: scaleLayoutForCols(baseLg, 24, 12),
+      sm: scaleLayoutForCols(baseLg, 24, 8),
+      xs: scaleLayoutForCols(baseLg, 24, 4),
+      xxs: scaleLayoutForCols(baseLg, 24, 2)
+    } as Layouts;
+  };
+
+  const storageKey = useMemo(() => `dashboard_layout_${activeDashboard?.id || 'processed_dashboard'}_v2`,[activeDashboard?.id]);
+
+  const [layouts, setLayouts] = useState<Layouts>({ lg: [], md: [], sm: [], xs: [], xxs: [] });
+
+  // Initialize or update layouts when active dashboard changes
+  useEffect(() => {
+    if (!activeDashboard) {
+      setLayouts({ lg: [], md: [], sm: [], xs: [], xxs: [] });
+      return;
+    }
+
+    const initial = buildLayoutsFromComponents(activeDashboard.components);
+
+    // If rendering from processedData (fresh dashboard), always use backend defaults first
+    if (normalizedProcessed) {
+      setLayouts(initial);
+      return;
+    }
+
+    // Otherwise, try to restore saved layouts for persisted dashboards
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Layouts;
+        setLayouts(parsed);
+        return;
+      }
+    } catch (_e) {
+      // ignore parse errors and fall back to initial
+    }
+    setLayouts(initial);
+  }, [activeDashboard, storageKey, normalizedProcessed]);
+
+  const handleLayoutChange = (current: Layout[], all: Layouts) => {
+    setLayouts(all);
+    // Persist per dashboard id
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(all));
+    } catch (_e) { /* ignore */ }
+
+    // Sync back to dashboard state only when using real configuration
+    if (!processedData && dashboardState.configuration && updateComponent) {
+      const byId = new Map(current.map((item) => [item.i, item]));
+      dashboardState.configuration.components.forEach((comp) => {
+        const l = byId.get(String(comp.id));
+        if (l) {
+          updateComponent(comp.id, { position: { x: l.x, y: l.y, width: l.w, height: l.h, minW: l.minW, minH: l.minH } });
+        }
+      });
+    }
+  };
+
+  // Handle refresh
+  const handleRefresh = async () => {
+    if (dashboardState.configuration) {
+      await refreshDashboard({
+        dashboard_id: dashboardState.configuration.id,
+        force_refresh: true
+      });
+    } else {
+      // Regenerate dashboard
+      const request: DashboardGenerationRequest = {
+        data_source: dataSource,
+        layout_preference: LayoutType.GRID,
+        chart_types: [ChartType.LINE, ChartType.BAR, ChartType.METRIC, ChartType.TABLE, ChartType.GEOGRAPHIC],
+        metadata: {
+          title: "eCommerce Sales Dashboard",
+        }
+      };
+      generateDashboard(request);
+    }
+  };
+
+  // Handle component refresh
+  const handleComponentRefresh = async (componentId: string) => {
+    if (dashboardState.configuration) {
+      await refreshDashboard({
+        dashboard_id: dashboardState.configuration.id,
+        force_refresh: true
+      });
+    }
+  };
+
+  // Handle component error
+  const handleComponentError = (error: Error, component: any) => {
+    console.error('Chart component error:', error, component);
+  };
+
+  // Extract dashboard metadata (handle both nested and top-level dashboard object)
+  const dashboardMetadata = useMemo(() => {
+    // Try top-level first (correct structure)
+    if (processedData?.dashboard) {
+      return {
+        title: processedData.dashboard.title,
+        description: processedData.dashboard.description,
+        styling: processedData.dashboard.styling,
+        insights: processedData.insights || []
+      };
+    }
+    // Fallback to nested structure (if backend wraps it)
+    if (processedData?.data?.dashboard) {
+      return {
+        title: processedData.data.dashboard.title,
+        description: processedData.data.dashboard.description,
+        styling: processedData.data.dashboard.styling,
+        insights: processedData.data.insights || processedData.insights || []
+      };
+    }
+    return null;
+  }, [processedData]);
+
+  return (
+    <div
+      ref={containerRef}
+      id="dashboard-preview-root"
+      data-dashboard-root
+      className={`h-full overflow-y-auto ${getChartStylingClasses(dashboardStylingForContainer || getDefaultChartStyling() as any)} ${className}`}
+      style={{
+        ...style,
+        ...getDashboardBackgroundStyle(dashboardStylingForContainer || getDefaultChartStyling())
+      }}
+      data-theme="dashboard-preview"
+    >
+      {/* Dashboard Header with Title and Description */}
+      {dashboardMetadata && (
+        <div className="px-6 pt-6 pb-4" style={{ borderColor: 'var(--border-card-color)' }}>
+          <div className="flex flex-col gap-2">
+            {/* Row 1: Title and Controls */}
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex-1">
+                <h1 
+                  className="text-3xl font-bold" 
+                  style={{ color: 'var(--highlight-color)' }}
+                >
+                  {dashboardMetadata.title}
+                </h1>
+                {dashboardMetadata.description && (
+                  <p 
+                    className="text-base opacity-90 mt-1" 
+                    style={{ color: 'var(--description-color)' }}
+                  >
+                    {dashboardMetadata.description}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {/* Date Picker */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="flex items-center gap-2 px-3 py-1.5 h-9 text-sm rounded-md border hover:opacity-80 transition-opacity"
+                      style={{ 
+                        color: 'var(--highlight-color)',
+                        backgroundColor: 'var(--bg-card-color)',
+                        borderColor: 'var(--border-card-color)'
+                      }}
+                    >
+                      <CalendarIcon className="w-4 h-4" />
+                      <span>
+                        {dateRange?.from ? (
+                          dateRange.to ? (
+                            <>
+                              {format(dateRange.from, "MMM dd, yyyy")} - {format(dateRange.to, "MMM dd, yyyy")}
+                            </>
+                          ) : (
+                            format(dateRange.from, "MMM dd, yyyy")
+                          )
+                        ) : (
+                          "Select Dates"
+                        )}
+                      </span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent 
+                    className={`w-auto p-0 [&]:!bg-[var(--bg-card-color)] ${getChartStylingClasses(dashboardStylingForContainer || getDefaultChartStyling() as any)}`}
+                    align="end"
+                    style={getDashboardThemeStyles(dashboardStylingForContainer)}
+                  >
+                    <Calendar
+                      initialFocus
+                      mode="range"
+                      defaultMonth={dateRange?.from}
+                      selected={dateRange}
+                      onSelect={setDateRange}
+                      numberOfMonths={2}
+                      themeStyles={getDashboardThemeStyles(dashboardStylingForContainer)}
+                    />
+                  </PopoverContent>
+                </Popover>
+                {/* Key Insights Button */}
+                {dashboardMetadata.insights && dashboardMetadata.insights.length > 0 && (
+                  <button
+                    onClick={() => setExpandedInsights(!expandedInsights)}
+                    className="flex items-center justify-start gap-2 px-3 py-1.5 h-9 text-sm rounded-md border hover:opacity-80 transition-opacity flex-shrink-0"
+                    style={{ 
+                      color: 'var(--highlight-color)',
+                      backgroundColor: 'var(--bg-card-color)',
+                      borderColor: 'var(--border-card-color)'
+                    }}
+                  >
+                    <span className="text-sm font-medium">Key Insights</span>
+                    {expandedInsights ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* Expanded Insights List */}
+            {dashboardMetadata?.insights && dashboardMetadata.insights.length > 0 && expandedInsights && (
+              <div className="w-full mt-2">
+                <h2 
+                  className="text-lg font-medium mb-2" 
+                  style={{ color: 'var(--description-color)' }}
+                >
+                  Key Insights
+                </h2>
+                <ul className="space-y-2">
+                  {dashboardMetadata.insights.map((insight: string, index: number) => (
+                    <li 
+                      key={index}
+                      className="flex items-start gap-2"
+                    >
+                      <span 
+                        className="mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: 'var(--highlight-color)' }}
+                      />
+                      <span 
+                        className="text-sm"
+                        style={{ color: 'var(--highlight-color)' }}
+                      >
+                        {insight}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+
+      {/* Main Dashboard Content */}
+      <div className="p-6">
+        {/* Loading State */}
+        {dashboardState.loading && !dashboardState.configuration && (
+          <div className="flex items-center justify-center h-64">
+            <div className="text-center space-y-4">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto" />
+              <p className="text-muted-foreground">Generating dashboard...</p>
+            </div>
+          </div>
+        )}
+
+        {/* Error State */}
+        {dashboardState.error && !dashboardState.configuration && (
+          <Alert variant="destructive" className="mb-6">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              {dashboardState.error}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Responsive Drag & Resize Grid */}
+        {activeDashboard && (
+          <div className="space-y-6">
+            <ResponsiveGridLayout
+              className="layout"
+              layouts={layouts}
+              breakpoints={breakpoints}
+              cols={cols}
+              margin={margin}
+              containerPadding={containerPadding}
+              rowHeight={rowHeight}
+              isDraggable
+              isResizable
+              preventCollision
+              isBounded
+              compactType={null}
+              resizeHandles={['se','e','s', 'w','n']}
+              onLayoutChange={handleLayoutChange}
+            >
+              {activeDashboard.components.map((component: any) => (
+                <div key={String(component.id)} className="animate-fade-in group relative">
+                  <ChartRenderer
+                    component={component}
+                    onError={handleComponentError}
+                  />
+                  <button
+                    onClick={() => setSpotlightId(String(component.id))}
+                    className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-white/80 backdrop-blur-sm border border-border/30 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm hover:bg-[#ff5600]/10 hover:text-[#ff5600] text-muted-foreground z-10"
+                    aria-label="Expand chart"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </ResponsiveGridLayout>
+
+            {/* Spotlight overlay */}
+            <AnimatePresence>
+              {spotlightId && (() => {
+                const spotlightComponent = activeDashboard.components.find((c: any) => String(c.id) === spotlightId);
+                if (!spotlightComponent) return null;
+                return (
+                  <motion.div
+                    key="spotlight-overlay"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm flex items-center justify-center p-8"
+                    onClick={() => setSpotlightId(null)}
+                  >
+                    <motion.div
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.9, opacity: 0 }}
+                      transition={{ type: "spring", stiffness: 400, damping: 30 }}
+                      className="bg-white rounded-2xl w-full max-w-4xl max-h-[80vh] overflow-auto shadow-2xl relative"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        onClick={() => setSpotlightId(null)}
+                        className="absolute top-3 right-3 z-10 w-8 h-8 flex items-center justify-center rounded-full bg-muted hover:bg-border text-muted-foreground hover:text-foreground transition-colors"
+                        aria-label="Close"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                      <div className="p-4 min-h-[400px]">
+                        <ChartRenderer
+                          component={spotlightComponent}
+                          onError={handleComponentError}
+                        />
+                      </div>
+                    </motion.div>
+                  </motion.div>
+                );
+              })()}
+            </AnimatePresence>
+          </div>
+        )}
+
+        {!processedData && !dashboardState.configuration && !dashboardState.loading && !dashboardState.error && (
+          <div className="space-y-6">
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                No dashboard configuration available. Generate a dashboard or upload data to get started.
+              </AlertDescription>
+            </Alert>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default DashboardPreview;
